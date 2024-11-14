@@ -1,4 +1,3 @@
-
 import os
 from tqdm.auto import tqdm
 from opt import config_parser
@@ -8,15 +7,14 @@ from opt import config_parser
 import json, random
 from renderer import *
 from utils import *
-from torch.utils.tensorboard import SummaryWriter
 import datetime
-
+import wandb
 from dataLoader import dataset_dict
 import sys
 
 
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+args = config_parser()
+device = torch.device(f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu")
 
 renderer = OctreeRender_trilinear_fast
 
@@ -107,6 +105,17 @@ def reconstruction(args):
         logfolder = f'{args.basedir}/{args.expname}{datetime.datetime.now().strftime("-%Y%m%d-%H%M%S")}'
     else:
         logfolder = f'{args.basedir}/{args.expname}'
+
+    # Initialize wandb
+    wandb.init(
+        project="tensorf",  # Change this to your project name
+        name=args.expname,
+        config={
+        "GPU": torch.cuda.get_device_name(0),
+            "dataset_type": 'lego',
+            **vars(args),
+        },
+    )
     
 
     # init log file
@@ -114,7 +123,6 @@ def reconstruction(args):
     os.makedirs(f'{logfolder}/imgs_vis', exist_ok=True)
     os.makedirs(f'{logfolder}/imgs_rgba', exist_ok=True)
     os.makedirs(f'{logfolder}/rgba', exist_ok=True)
-    summary_writer = SummaryWriter(logfolder)
 
 
 
@@ -191,22 +199,22 @@ def reconstruction(args):
         if Ortho_reg_weight > 0:
             loss_reg = tensorf.vector_comp_diffs()
             total_loss += Ortho_reg_weight*loss_reg
-            summary_writer.add_scalar('train/reg', loss_reg.detach().item(), global_step=iteration)
+            wandb.log({"train/reg": loss_reg.detach().item()}, step=iteration)
         if L1_reg_weight > 0:
             loss_reg_L1 = tensorf.density_L1()
             total_loss += L1_reg_weight*loss_reg_L1
-            summary_writer.add_scalar('train/reg_l1', loss_reg_L1.detach().item(), global_step=iteration)
+            wandb.log({"train/reg_l1": loss_reg_L1.detach().item()}, step=iteration)
 
         if TV_weight_density>0:
             TV_weight_density *= lr_factor
             loss_tv = tensorf.TV_loss_density(tvreg) * TV_weight_density
             total_loss = total_loss + loss_tv
-            summary_writer.add_scalar('train/reg_tv_density', loss_tv.detach().item(), global_step=iteration)
+            wandb.log({"train/reg_tv_density": loss_tv.detach().item()}, step=iteration)
         if TV_weight_app>0:
             TV_weight_app *= lr_factor
             loss_tv = tensorf.TV_loss_app(tvreg)*TV_weight_app
             total_loss = total_loss + loss_tv
-            summary_writer.add_scalar('train/reg_tv_app', loss_tv.detach().item(), global_step=iteration)
+            wandb.log({"train/reg_tv_app": loss_tv.detach().item()}, step=iteration)
 
         optimizer.zero_grad()
         total_loss.backward()
@@ -215,8 +223,8 @@ def reconstruction(args):
         loss = loss.detach().item()
         
         PSNRs.append(-10.0 * np.log(loss) / np.log(10.0))
-        summary_writer.add_scalar('train/PSNR', PSNRs[-1], global_step=iteration)
-        summary_writer.add_scalar('train/mse', loss, global_step=iteration)
+        wandb.log({"train/PSNR": PSNRs[-1]}, step=iteration)
+        wandb.log({"train/mse": loss}, step=iteration)
 
 
         for param_group in optimizer.param_groups:
@@ -236,7 +244,7 @@ def reconstruction(args):
         if iteration % args.vis_every == args.vis_every - 1 and args.N_vis!=0:
             PSNRs_test = evaluation(test_dataset,tensorf, args, renderer, f'{logfolder}/imgs_vis/', N_vis=args.N_vis,
                                     prtx=f'{iteration:06d}_', N_samples=nSamples, white_bg = white_bg, ndc_ray=ndc_ray, compute_extra_metrics=False)
-            summary_writer.add_scalar('test/psnr', np.mean(PSNRs_test), global_step=iteration)
+            wandb.log({"test/psnr": np.mean(PSNRs_test)}, step=iteration)
 
 
 
@@ -279,15 +287,16 @@ def reconstruction(args):
     if args.render_train:
         os.makedirs(f'{logfolder}/imgs_train_all', exist_ok=True)
         train_dataset = dataset(args.datadir, split='train', downsample=args.downsample_train, is_stack=True)
-        PSNRs_test = evaluation(train_dataset,tensorf, args, renderer, f'{logfolder}/imgs_train_all/',
+        PSNRs_train = evaluation(train_dataset,tensorf, args, renderer, f'{logfolder}/imgs_train_all/',
                                 N_vis=-1, N_samples=-1, white_bg = white_bg, ndc_ray=ndc_ray,device=device)
-        print(f'======> {args.expname} test all psnr: {np.mean(PSNRs_test)} <========================')
+        wandb.log({"train/psnr_all": np.mean(PSNRs_train)}, step=iteration)
+        print(f'======> {args.expname} train all psnr: {np.mean(PSNRs_train)} <========================')
 
     if args.render_test:
         os.makedirs(f'{logfolder}/imgs_test_all', exist_ok=True)
         PSNRs_test = evaluation(test_dataset,tensorf, args, renderer, f'{logfolder}/imgs_test_all/',
                                 N_vis=-1, N_samples=-1, white_bg = white_bg, ndc_ray=ndc_ray,device=device)
-        summary_writer.add_scalar('test/psnr_all', np.mean(PSNRs_test), global_step=iteration)
+        wandb.log({"test/psnr_all": np.mean(PSNRs_test)}, step=iteration)
         print(f'======> {args.expname} test all psnr: {np.mean(PSNRs_test)} <========================')
 
     if args.render_path:

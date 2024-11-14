@@ -128,6 +128,8 @@ def config_parser(cmd=None):
                         help='N images to vis')
     parser.add_argument("--vis_every", type=int, default=10000,
                         help='frequency of visualize the image')
+    parser.add_argument("--gpu_id", type=int, default=0,
+                        help='gpu id')
     if cmd is not None:
         return parser.parse_args(cmd)
     else:
